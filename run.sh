@@ -31,23 +31,12 @@ echo "🖧  RDP : localhost:3389"
 
 qemu-system-x86_64 \
   -enable-kvm \
-  -machine pc,accel=kvm \
-  -cpu host,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff \
-  -smp sockets=1,cores=${CORES},threads=${THREADS} \
-  -m ${RAM} \
-  -mem-prealloc \
-  -rtc base=localtime \
-  -boot menu=on \
-  \
-  -device lsi53c895a,id=scsi0 \
-  -drive file=${DISK_FILE},if=none,format=qcow2,id=hd0 \
-  -device scsi-hd,drive=hd0,bus=scsi0.0 \
-  \
-  -cdrom ${ISO_FILE} \
-  \
-  -netdev user,id=net0,hostfwd=tcp::${RDP_PORT}-:3389 \
-  -device e1000,netdev=net0 \
-  \
-  -display none \
-  -vnc ${VNC_DISPLAY} \
+  -cpu host \
+  -smp 8 \
+  -m 16G \
+  -machine q35 \
+  -drive file=/win11.qcow2,if=virtio,format=qcow2 \
+  -vnc :0 \
+  -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
+  -device virtio-net,netdev=net0 \
   -usb -device usb-tablet
