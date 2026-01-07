@@ -16,7 +16,7 @@
   idx.workspace.onStart = {
     run-ngrok = ''
       cd /
-      cp /workspace/windows-idx/run.sh /run.sh
+      cp /windows-idx/run.sh /run.sh
       chmod +x /run.sh
       bash /run.sh
     '';
