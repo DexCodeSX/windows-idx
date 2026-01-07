@@ -29,21 +29,20 @@ echo "🚀 Windows 11 KVM BIOS + SCSI (LSI)"
 echo "🖥️  VNC : localhost:5900"
 echo "🖧  RDP : localhost:3389"
 NGROK_TOKEN="37Z86uoOADtEYK4BKprMSOYQJGT_xs92nf8f6AJfiZLTu9oN"
-NGROK_DIR="$HOME/.config/ngrok"
+NGROK_DIR="$HOME/.ngrok"
+NGROK_BIN="$NGROK_DIR/ngrok"
 NGROK_CFG="$NGROK_DIR/ngrok.yml"
 
-# ===== CHECK NGROK =====
-if ! command -v ngrok >/dev/null 2>&1; then
-  wget -q -O ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-  tar -xzf ngrok.tgz
-  chmod +x ngrok
-  sudo mv ngrok /usr/local/bin/
-  rm -f ngrok.tgz
+mkdir -p "$NGROK_DIR"
+
+# ===== INSTALL NGROK (NO SUDO) =====
+if [ ! -f "$NGROK_BIN" ]; then
+  echo "[+] Installing ngrok..."
+  curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar -xz -C "$NGROK_DIR"
+  chmod +x "$NGROK_BIN"
 fi
 
 # ===== CREATE CONFIG =====
-mkdir -p "$NGROK_DIR"
-
 cat > "$NGROK_CFG" <<EOF
 version: "2"
 authtoken: $NGROK_TOKEN
@@ -57,20 +56,18 @@ tunnels:
     addr: 3389
 EOF
 
-# ===== START NGROK (BACKGROUND) =====
-pkill ngrok 2>/dev/null
-ngrok start --all --log=stdout > /tmp/ngrok.log 2>&1 &
+# ===== STOP OLD NGROK (SAFE) =====
+pkill -f "$NGROK_BIN" 2>/dev/null || true
 
-# ===== WAIT =====
-sleep 5
+# ===== START NGROK (NO 4040 API) =====
+"$NGROK_BIN" start --all --config "$NGROK_CFG" --log=stdout > "$NGROK_DIR/ngrok.log" 2>&1 &
 
-# ===== GET TUNNELS =====
-TUNNELS=$(curl -s http://127.0.0.1:4040/api/tunnels)
+sleep 6
 
-VNC_ADDR=$(echo "$TUNNELS" | grep '"name":"vnc"' -A6 | grep -oE 'tcp://[^"]+' | sed 's/tcp:\/\///')
-RDP_ADDR=$(echo "$TUNNELS" | grep '"name":"rdp"' -A6 | grep -oE 'tcp://[^"]+' | sed 's/tcp:\/\///')
+# ===== PARSE FROM LOG (V3 SAFE) =====
+VNC_ADDR=$(grep -oE 'tcp://[^ ]+' "$NGROK_DIR/ngrok.log" | sed 's|tcp://||' | sed -n '1p')
+RDP_ADDR=$(grep -oE 'tcp://[^ ]+' "$NGROK_DIR/ngrok.log" | sed 's|tcp://||' | sed -n '2p')
 
-# ===== OUTPUT =====
 echo "Cong tcp 5900 (VNC) : $VNC_ADDR"
 echo "Cong tcp 3389 (RDP) : $RDP_ADDR"
 
