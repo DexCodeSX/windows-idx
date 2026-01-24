@@ -2,7 +2,7 @@
 set -e
 
 ### CONFIG ###
-ISO_URL="https://go.microsoft.com/fwlink/p/?LinkID=2195443"
+ISO_URL="https://archive.org/download/tiny-10-23-h2/tiny10%20x64%2023h2.iso"
 ISO_FILE="win11-gamer.iso"
 
 DISK_FILE="/var/win11.qcow2"
