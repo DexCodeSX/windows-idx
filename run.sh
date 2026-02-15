@@ -1,71 +1,48 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-### CONFIG ###
-ISO_URL="https://archive.org/download/tiny-10-23-h2/tiny10%20x64%2023h2.iso"
-ISO_FILE="win11-gamer.iso"
+W="$HOME/windows-idx"
+D="/var/win11.qcow2"
+I="$W/win11-gamer.iso"
+F="$W/installed.flag"
+L="$W/run.log"
+U="https://archive.org/download/tiny-10-23-h2/tiny10%20x64%2023h2.iso"
+N="$HOME/.ngrok"
+NB="$N/ngrok"
+NC="$N/ngrok.yml"
+NL="$N/ngrok.log"
+NT="38WO5iYPn4Hq5A5SUOjtGptsxfE_7jDB4PmSF78GKcAguUo1H"
 
-DISK_FILE="/var/win11.qcow2"
-DISK_SIZE="64G"
+exec > >(tee -a "$L") 2>&1
+ts() { echo "[$(date '+%H:%M:%S')]"; }
 
-RAM="8G"
-CORES="4"
+mkdir -p "$W" "$N"
+cd "$W"
 
-VNC_DISPLAY=":0"
-RDP_PORT="3389"
+[ -e /dev/kvm ] || { echo "$(ts) NO KVM"; exit 1; }
+command -v qemu-system-x86_64 >/dev/null || { echo "$(ts) NO QEMU"; exit 1; }
 
-FLAG_FILE="installed.flag"
-WORKDIR="$HOME/windows-idx"
+[ -f "$D" ] || qemu-img create -f qcow2 "$D" 64G
 
-### NGROK ###
-NGROK_TOKEN="38WO5iYPn4Hq5A5SUOjtGptsxfE_7jDB4PmSF78GKcAguUo1H"
-NGROK_DIR="$HOME/.ngrok"
-NGROK_BIN="$NGROK_DIR/ngrok"
-NGROK_CFG="$NGROK_DIR/ngrok.yml"
-NGROK_LOG="$NGROK_DIR/ngrok.log"
-
-### CHECK ###
-[ -e /dev/kvm ] || { echo "❌ No /dev/kvm"; exit 1; }
-command -v qemu-system-x86_64 >/dev/null || { echo "❌ No qemu"; exit 1; }
-
-### PREP ###
-mkdir -p "$WORKDIR"
-cd "$WORKDIR"
-
-[ -f "$DISK_FILE" ] || qemu-img create -f qcow2 "$DISK_FILE" "$DISK_SIZE"
-
-if [ ! -f "$FLAG_FILE" ]; then
-  [ -f "$ISO_FILE" ] || wget --no-check-certificate \
-    -O "$ISO_FILE" "$ISO_URL"
+INSTALL=0
+if [ ! -f "$F" ]; then
+  INSTALL=1
+  if [ ! -f "$I" ]; then
+    echo "$(ts) Downloading ISO..."
+    wget --no-check-certificate -q --show-progress -O "$I" "$U" || { echo "$(ts) ISO download failed"; exit 1; }
+  fi
+  echo "$(ts) ISO ready"
 fi
 
-
-############################
-# BACKGROUND FILE CREATOR #
-############################
-(
-  while true; do
-    echo "Lộc Nguyễn đẹp troai" > locnguyen.txt
-    echo "[$(date '+%H:%M:%S')] Đã tạo locnguyen.txt"
-    sleep 300
-  done
-) &
-FILE_PID=$!
-
-#################
-# NGROK START  #
-#################
-mkdir -p "$NGROK_DIR"
-
-if [ ! -f "$NGROK_BIN" ]; then
-  curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz \
-  | tar -xz -C "$NGROK_DIR"
-  chmod +x "$NGROK_BIN"
+if [ ! -f "$NB" ]; then
+  echo "$(ts) Installing ngrok..."
+  curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz | tar -xz -C "$N"
+  chmod +x "$NB"
 fi
 
-cat > "$NGROK_CFG" <<EOF
+cat > "$NC" <<EOF
 version: "2"
-authtoken: $NGROK_TOKEN
+authtoken: $NT
 tunnels:
   vnc:
     proto: tcp
@@ -75,66 +52,53 @@ tunnels:
     addr: 3389
 EOF
 
-pkill -f "$NGROK_BIN" 2>/dev/null || true
-"$NGROK_BIN" start --all --config "$NGROK_CFG" \
-  --log=stdout > "$NGROK_LOG" 2>&1 &
-sleep 5
+pkill -f ngrok 2>/dev/null || true
+sleep 1
+"$NB" start --all --config "$NC" --log=stdout > "$NL" 2>&1 &
 
-VNC_ADDR=$(grep -oE 'tcp://[^ ]+' "$NGROK_LOG" | sed -n '1p')
-RDP_ADDR=$(grep -oE 'tcp://[^ ]+' "$NGROK_LOG" | sed -n '2p')
+get_tunnels() {
+  for i in $(seq 1 20); do
+    R=$(curl -s http://127.0.0.1:4040/api/tunnels 2>/dev/null) || { sleep 1; continue; }
+    C=$(echo "$R" | grep -c '"public_url"' || true)
+    if [ "$C" -ge 2 ]; then
+      VNC=$(echo "$R" | grep -oP '"public_url":"tcp://[^"]*' | sed 's/"public_url":"//g' | head -1)
+      RDP=$(echo "$R" | grep -oP '"public_url":"tcp://[^"]*' | sed 's/"public_url":"//g' | tail -1)
+      echo "$(ts) VNC: ${VNC:-none}"
+      echo "$(ts) RDP: ${RDP:-none}"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "$(ts) Ngrok tunnels timeout"
+  return 1
+}
 
-echo "🌍 VNC PUBLIC : $VNC_ADDR"
-echo "🌍 RDP PUBLIC : $RDP_ADDR"
+get_tunnels
 
-#################
-# RUN QEMU     #
-#################
-if [ ! -f "$FLAG_FILE" ]; then
-  echo "⚠️  CHẾ ĐỘ CÀI ĐẶT WINDOWS"
-  echo "👉 Cài xong quay lại nhập: xong"
+Q_COMMON="-enable-kvm -cpu host -smp 4 -m 8G -machine q35 \
+-drive file=$D,if=ide,format=qcow2 \
+-netdev user,id=n0,hostfwd=tcp::3389-:3389 \
+-device e1000,netdev=n0 -vnc :0 -usb -device usb-tablet -daemonize"
 
-  qemu-system-x86_64 \
-    -enable-kvm \
-    -cpu host \
-    -smp "$CORES" \
-    -m "$RAM" \
-    -machine q35 \
-    -drive file="$DISK_FILE",if=ide,format=qcow2 \
-    -cdrom "$ISO_FILE" \
-    -boot order=d \
-    -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
-    -device e1000,netdev=net0 \
-    -vnc "$VNC_DISPLAY" \
-    -usb -device usb-tablet &
-
-  QEMU_PID=$!
-
+if [ "$INSTALL" -eq 1 ]; then
+  echo "$(ts) INSTALL MODE"
+  eval qemu-system-x86_64 $Q_COMMON -cdrom "$I" -boot order=d || { echo "$(ts) QEMU failed"; exit 1; }
+  echo "$(ts) QEMU started - install Windows via VNC"
+  echo "$(ts) Type 'done' when finished"
   while true; do
-    read -rp "👉 Nhập 'xong': " DONE
-    if [ "$DONE" = "xong" ]; then
-      touch "$FLAG_FILE"
-      kill "$QEMU_PID"
-      kill "$FILE_PID"
-      pkill -f "$NGROK_BIN"
-      rm -f "$ISO_FILE"
-      echo "✅ Hoàn tất – lần sau boot thẳng qcow2"
+    read -rp "> " A
+    if [ "$A" = "done" ]; then
+      touch "$F"
+      rm -f "$I"
+      pkill -f qemu-system || true
+      pkill -f ngrok || true
+      echo "$(ts) Saved. Next boot is normal."
       exit 0
     fi
   done
-
 else
-  echo "✅ Windows đã cài – boot thường"
-
-  qemu-system-x86_64 \
-    -enable-kvm \
-    -cpu host \
-    -smp "$CORES" \
-    -m "$RAM" \
-    -machine q35 \
-    -drive file="$DISK_FILE",if=ide,format=qcow2 \
-    -boot order=c \
-    -netdev user,id=net0,hostfwd=tcp::3389-:3389 \
-    -device e1000,netdev=net0 \
-    -vnc "$VNC_DISPLAY" \
-    -usb -device usb-tablet
+  echo "$(ts) BOOT MODE"
+  eval qemu-system-x86_64 $Q_COMMON -boot order=c || { echo "$(ts) QEMU failed"; exit 1; }
+  echo "$(ts) Windows running"
+  wait
 fi
